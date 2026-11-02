@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type {
   AuthContext, AuthResult, Provider, ProviderHeaders, StreamOptions,
 } from "@earendil-works/pi-ai";
-import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 export const PROVIDER_ID = "muse";
 type Env = Record<string, string | undefined>;
@@ -39,7 +39,9 @@ export async function readMuseKey(path: string, signal?: AbortSignal): Promise<s
     // Never include file contents or JSON.parse's credential-bearing error text.
     throw new Error("Invalid Muse auth.json; log in with Muse again");
   }
-  const key = value && typeof value === "object" && "api_key" in value ? value.api_key : undefined;
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const providers = record?.providers as { meta?: { api_key?: unknown } } | undefined;
+  const key = record?.api_key ?? providers?.meta?.api_key;
   if (typeof key !== "string" || !key.trim()) {
     throw new Error("Muse auth.json has no api_key; access_token is not an inference key");
   }
@@ -48,7 +50,7 @@ export async function readMuseKey(path: string, signal?: AbortSignal): Promise<s
 
 /** Names captured from Muse; undocumented values remain configurable. */
 export function museHeaders(modelId: string, sessionId: string, env: Env = process.env): ProviderHeaders {
-  const userAgent = env.MUSE_USER_AGENT || `pi-muse-provider/0.1.0 (${process.platform}; ${process.arch})`;
+  const userAgent = env.MUSE_USER_AGENT || `pi-muse-provider/0.1.1 (${process.platform}; ${process.arch})`;
   const contributor = modelId.endsWith("-contributor");
   return {
     "x-client-id": headerValue("MUSE_CLIENT_ID", env.MUSE_CLIENT_ID || "tbh:exec"),
@@ -86,7 +88,10 @@ export interface MuseProviderOptions {
 }
 
 export function createMuseProvider(config: MuseProviderOptions = {}): Provider<"openai-responses"> {
-  const meta = metaProvider();
+  // Pi maps providers/all for dependency-free extensions, but not individual
+  // provider subpaths. Resolve through that host-supplied entry point.
+  const meta = builtinProviders().find((provider) => provider.id === "meta") as Provider<"openai-responses"> | undefined;
+  if (!meta) throw new Error("Muse requires a Pi build with the built-in Meta provider");
   const env = config.env ?? process.env;
   // A fallback for direct SDK callers. Pi supplies its durable session ID.
   const fallbackSessionId = randomUUID();

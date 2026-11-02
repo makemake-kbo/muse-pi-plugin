@@ -277,6 +277,16 @@ test("key sources, file rotation, missing/malformed files and no token leakage",
     assert.equal((await auth.resolve({ ...input, credential: { type: "api_key", key: "stored-key" } }))?.auth.apiKey, "stored-key");
     await writeFile(path, JSON.stringify({ api_key: "rotated-key" }));
     assert.equal((await auth.resolve(input))?.auth.apiKey, "rotated-key");
+    await writeFile(path, JSON.stringify({ providers: { meta: {
+      mechanism: "oauth", api_key: "nested-key", access_token: "wrong-identity-token",
+    } } }));
+    assert.equal((await auth.resolve(input))?.auth.apiKey, "nested-key");
+    await writeFile(path, JSON.stringify({ providers: { meta: { access_token: "wrong-token" } } }));
+    await assert.rejects(readMuseKey(path), /no api_key/);
+    for (const malformed of [null, [], { providers: null }, { providers: { meta: null } }]) {
+      await writeFile(path, JSON.stringify(malformed));
+      await assert.rejects(readMuseKey(path), /no api_key/);
+    }
     await writeFile(path, '{"api_key":"secret-value" garbage');
     await assert.rejects(readMuseKey(path), (error: Error) => !error.message.includes("secret-value") && /Invalid Muse/.test(error.message));
     await writeFile(path, JSON.stringify({ access_token: "wrong-token" }));

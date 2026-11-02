@@ -1,14 +1,16 @@
 {
   "name": "pi-muse-provider",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.1",
+  "publishConfig": { "access": "public" },
+  "files": ["src/", "CHANGELOG.md"],
   "type": "module",
   "description": "Muse request attribution and subscription usage for Pi",
   "keywords": ["pi-package"],
   "pi": { "extensions": ["./src/index.ts"] },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

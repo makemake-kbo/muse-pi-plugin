@@ -1,7 +1,7 @@
 # Pi Muse provider
 
 A Pi 1.4.0+ extension that sends Responses API requests with the Muse attribution
-headers recorded in [`muse-pi-findings.md`](./muse-pi-findings.md). Pi still owns the
+headers described below. Pi still owns the
 agent loop, tools, transcript, images, reasoning, cancellation, and token accounting.
 It does **not** wrap `muse exec` or run a second agent.
 
@@ -13,6 +13,12 @@ proofs. A `client_attestation_denied` response remains an error; there is no
 pay-as-you-go fallback. Check the service's terms before use.
 
 ## Load
+
+Public npm installation:
+
+```sh
+pi install npm:pi-muse-provider
+```
 
 From this directory, try it for one invocation:
 
@@ -27,6 +33,11 @@ pi install /absolute/path/to/muse-pi-plugin
 ```
 
 Use one method, not both. `/reload` reloads an installed extension.
+
+Version `0.1.1` fixes two `0.1.0` compatibility issues: current Muse credentials
+store the key at `providers.meta.api_key`, and a standalone Pi extension must
+resolve Meta through the host-mapped `providers/all` entry point. Both fixes are
+included in the package; Nix installations no longer need compatibility patches.
 
 ### Credentials
 
@@ -71,18 +82,30 @@ authentication, remove the stored credential with `/logout muse`.
 | `x-tbh-root-session-id` | Pi session ID |
 | `x-tbh-agent-role` | `main` (override with `MUSE_AGENT_ROLE`) |
 | `traceparent` | Fresh W3C trace/span IDs per model request |
-| `user-agent` | `pi-muse-provider/0.1.0 (<platform>; <arch>)` |
+| `user-agent` | `pi-muse-provider/0.1.1 (<platform>; <arch>)` |
 
 The header **names** and `tbh:exec`/`tbh:tui` values were observed. The boolean
-encoding, role value, and mapping of all session/thread/root IDs to Pi's single
-session ID are compatibility assumptions, not a verified full client clone.
+encoding and mapping of all session/thread/root IDs to Pi's single session ID
+are compatibility assumptions, not a verified full client clone. The `main` role
+was confirmed in the local capture described below.
 Contributor mode is selected by the model suffix; no model name is silently changed.
 
-The findings only recorded the User-Agent pattern
-`muse-build/<version> (...; build <sha>)`, not an actual version/build. To match your
-client's exact value, supply the **complete captured value** via `MUSE_USER_AGENT`
-before starting Pi. The default deliberately identifies this bridge rather than
-inventing a Muse build. Do not put keys in any identity variables.
+Supply the **complete captured value** via `MUSE_USER_AGENT` to match your installed
+client. The extension's default identifies the bridge rather than inventing a Muse
+build. Do not put keys in any identity variables.
+
+Verified on Linux with `muse-bin-1.4.14-R7309.1`, captured on a genuine
+`POST /v1/responses` against a local listener with a dummy key and no outside network:
+
+```text
+muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)
+```
+
+The local Nix installation sets this exact value in both `pi` and `pi-unsandboxed`
+wrappers (unless explicitly overridden). It installs the extension as an immutable
+Home Manager-managed directory, not through `pi install`. Only Muse's auth file is
+exposed read-only to the sandbox. This profile matches Muse's headless `exec` mode;
+recapture it after upgrading Muse, and do not reuse a Linux build identity on macOS.
 
 Advanced: request headers (including `models.json` headers) override these defaults
 case-insensitively; a `null` value suppresses a header. This also permits overriding
@@ -126,3 +149,18 @@ For a local, offline extension-loading check (using a non-secret placeholder):
 ```sh
 MUSE_API_KEY=placeholder pi --offline --no-extensions -e ./src/index.ts --list-models muse
 ```
+
+## Publish
+
+The package is configured for public access under the unscoped name
+`pi-muse-provider`. Authenticate locally with `npm login`, then run:
+
+```sh
+npm publish --dry-run
+npm publish --access public
+```
+
+The publish hook runs typechecking and tests. The tarball includes only `src/`,
+`README.md`, `CHANGELOG.md`, and npm's required package metadata; local account findings, tests,
+credentials, and development dependencies are excluded. No open-source license
+has been selected; public npm visibility does not itself grant a software license.
