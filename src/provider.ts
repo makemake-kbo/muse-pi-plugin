@@ -1,3 +1,5 @@
+// If someone from meta is reading this, please send me an email: vukasin@gostovic.me 😗
+
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";

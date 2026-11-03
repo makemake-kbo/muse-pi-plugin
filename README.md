@@ -30,8 +30,7 @@ No separate Pi login is needed. Stored `/login muse` credentials take precedence
   required on other platforms.
 - `/muse-usage`: show the latest server-reported subscription usage.
 
-Tools are namespaced on the wire; Pi keeps their original names and executes them
-normally. No automatic billing fallback. In a sandbox, expose the auth file
+Tools are namespaced on the wire. No automatic billing fallback (but you may still be charged. I am a random on the internet. scope your tokens well). In a sandbox, expose the auth file
 read-only and restart Pi after Muse replaces it.
 
 ## Development
