@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Capture the Muse Code 1.4.14 macOS arm64 exec User-Agent, so Apple Silicon works out of the box instead of failing with "No captured Muse exec identity for this platform". Only the platform token differs from the Linux x64 capture (`macos-aarch64` vs `linux-x86_64`); every other identity header is unchanged.
+- Reject unknown platforms by name through `MUSE_USER_AGENT` only, with tests covering `linux/arm64`, `darwin/x64` and `win32/x64`.
+
 ## 0.1.2
 
 - Fix subscription request rejections by namespacing tools on the wire while preserving Pi's tool names, arguments, IDs and transcript.
