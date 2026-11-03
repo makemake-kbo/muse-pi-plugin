@@ -10,6 +10,9 @@ export default function wireCheck(): void {
     assert.equal(request.method, "POST");
     assert.ok(process.env.MUSE_USER_AGENT, "Run with the Nix-configured Pi wrapper");
     assert.equal(request.headers.get("user-agent"), process.env.MUSE_USER_AGENT);
+    if (process.env.MUSE_WIRE_INSPECT_HEADERS === "1") {
+      console.error(JSON.stringify({ headerNames: [...request.headers.keys()], accept: request.headers.get("accept") }));
+    }
     assert.equal(request.headers.get("x-client-id"), "tbh:exec");
     assert.ok(request.headers.get("x-tbh-session-id"));
     if (process.env.MUSE_WIRE_USE_EXISTING_AUTH === "1") {

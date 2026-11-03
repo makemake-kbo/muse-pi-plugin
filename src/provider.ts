@@ -3,11 +3,15 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
-  AuthContext, AuthResult, Provider, ProviderHeaders, StreamOptions,
+  AuthContext, AuthResult, Model, Provider, ProviderHeaders, StreamOptions,
 } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { aliasMuseTools } from "./tool-alias.ts";
 
 export const PROVIDER_ID = "muse";
+// Captured from Muse Code 1.4.14 exec, not derived from this package's version.
+export const MUSE_EXEC_LINUX_X64_USER_AGENT = "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)";
 type Env = Record<string, string | undefined>;
 export type SubscriptionUsage = Record<string, unknown>;
 
@@ -48,20 +52,28 @@ export async function readMuseKey(path: string, signal?: AbortSignal): Promise<s
   return key.trim();
 }
 
-/** Names captured from Muse; undocumented values remain configurable. */
-export function museHeaders(modelId: string, sessionId: string, env: Env = process.env): ProviderHeaders {
-  const userAgent = env.MUSE_USER_AGENT || `pi-muse-provider/0.1.1 (${process.platform}; ${process.arch})`;
-  const contributor = modelId.endsWith("-contributor");
+/** Use the captured exec identity; never silently fall back to a Pi User-Agent. */
+export function museUserAgent(env: Env, platform: string = process.platform, arch: string = process.arch): string {
+  if (env.MUSE_USER_AGENT) return headerValue("MUSE_USER_AGENT", env.MUSE_USER_AGENT);
+  if (platform !== "linux" || arch !== "x64") {
+    throw new Error("No captured Muse exec identity for this platform; set MUSE_USER_AGENT from your Muse CLI");
+  }
+  return MUSE_EXEC_LINUX_X64_USER_AGENT;
+}
+
+/** Main-agent attribution captured from Muse exec; model selection stays in the payload. */
+export function museHeaders(_modelId: string, sessionId: string, env: Env = process.env, withTools = false): ProviderHeaders {
   return {
+    accept: "text/event-stream",
+    "accept-encoding": "gzip,deflate,br",
     "x-client-id": headerValue("MUSE_CLIENT_ID", env.MUSE_CLIENT_ID || "tbh:exec"),
-    "x-tbh-contributor-mode": contributor ? "true" : "false",
     "x-tbh-session-id": sessionId,
     "x-meta-ai-gateway-session-id": sessionId,
     "x-tbh-thread-id": sessionId,
-    "x-tbh-root-session-id": sessionId,
+    ...(withTools ? { "x-tbh-root-session-id": sessionId } : {}),
     "x-tbh-agent-role": headerValue("MUSE_AGENT_ROLE", env.MUSE_AGENT_ROLE || "main"),
     traceparent: `00-${randomBytes(16).toString("hex")}-${randomBytes(8).toString("hex")}-01`,
-    "user-agent": headerValue("MUSE_USER_AGENT", userAgent),
+    "user-agent": museUserAgent(env),
   };
 }
 
@@ -73,7 +85,7 @@ function mergeHeaders(...sources: (ProviderHeaders | undefined)[]): ProviderHead
   return result;
 }
 
-/** Keep the event shape intact: the findings do not specify its field schema. */
+/** Preserve the server's usage fields rather than guessing a stable quota schema. */
 export function subscriptionUsage(event: unknown): SubscriptionUsage | undefined {
   if (!event || typeof event !== "object") return undefined;
   const data = event as Record<string, unknown>;
@@ -118,12 +130,25 @@ export function createMuseProvider(config: MuseProviderOptions = {}): Provider<"
     return undefined;
   }
 
-  function prepare<T extends StreamOptions>(modelId: string, options?: T): T {
+  function prepare<T extends StreamOptions>(model: Model<"openai-responses">, options?: T, withTools = false): T {
     const requestEnv = { ...env, ...options?.env };
     const sessionId = headerValue("sessionId", options?.sessionId || fallbackSessionId);
+    const fetcher = options?.fetch ?? globalThis.fetch;
+    const explicitHeaders = new Set(Object.keys({ ...model.headers, ...options?.headers }).map((name) => name.toLowerCase()));
     return {
       ...options,
-      headers: mergeHeaders(museHeaders(modelId, sessionId, requestEnv), options?.headers),
+      headers: mergeHeaders(museHeaders(model.id, sessionId, requestEnv, withTools), model.headers, options?.headers),
+      // Pi's Responses adapter uses the OpenAI SDK. Its telemetry and session
+      // headers are not sent by Muse exec; omit them unless explicitly requested.
+      fetch: (input, init) => {
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        for (const name of [...headers.keys()]) {
+          if (!explicitHeaders.has(name) && (name.startsWith("x-stainless-") || name === "session_id" || name === "x-client-request-id")) {
+            headers.delete(name);
+          }
+        }
+        return fetcher(input, { ...init, headers });
+      },
       onProviderStreamEvent: async (data, model) => {
         const usage = subscriptionUsage(data);
         if (usage) config.onUsage?.(usage, sessionId);
@@ -175,7 +200,13 @@ export function createMuseProvider(config: MuseProviderOptions = {}): Provider<"
       },
     },
     getModels: () => meta.getModels().map((model) => ({ ...model, provider: PROVIDER_ID })),
-    stream: (model, context, options) => meta.stream(model, context, prepare(model.id, options)),
-    streamSimple: (model, context, options) => meta.streamSimple(model, context, prepare(model.id, options)),
+    stream: (model, context, options) => {
+      const aliased = aliasMuseTools(context);
+      return aliased.restore(meta.stream(model, aliased.context, prepare(model, aliased.options(options), getCurrentTools(context.messages).length > 0)));
+    },
+    streamSimple: (model, context, options) => {
+      const aliased = aliasMuseTools(context);
+      return aliased.restore(meta.streamSimple(model, aliased.context, prepare(model, aliased.options(options), getCurrentTools(context.messages).length > 0)));
+    },
   };
 }

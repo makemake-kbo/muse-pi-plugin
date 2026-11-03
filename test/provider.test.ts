@@ -9,17 +9,27 @@ import {
 } from "@earendil-works/pi-ai";
 import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
 import {
-  createMuseProvider, museAuthPath, museHeaders, readMuseKey, subscriptionUsage,
+  createMuseProvider as createRawMuseProvider, museAuthPath, museHeaders, museUserAgent,
+  MUSE_EXEC_LINUX_X64_USER_AGENT, readMuseKey, subscriptionUsage,
 } from "../src/provider.ts";
+import { museExecProfile, museAgentProfile } from "./fixtures/muse-exec-profile.ts";
+
+// Keep intercepted-transport tests deterministic on hosts without a captured profile.
+function createMuseProvider(options: Parameters<typeof createRawMuseProvider>[0] = {}) {
+  return createRawMuseProvider({ ...options, env: { MUSE_USER_AGENT: museExecProfile["user-agent"], ...options.env } });
+}
 
 const context = normalizeContext({
   systemPrompt: "You are a coding assistant.",
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 });
+const bashTools = [{ name: "bash", description: "Execute a bash command", parameters: Type.Object({ command: Type.String() }) }];
+const bashContext = normalizeContext({ tools: bashTools, messages: context.messages });
 const signal = () => new AbortController().signal;
 const usage = {
   type: "response.subscription_usage", sequence_number: 2,
-  subscription_usage: { tier: "power", window_percent: 5, weekly_percent: 93 },
+  subscription: { tier: "opaque-product-id", weekly: { resets_at: 1794182400, used_percent: 0 },
+    window: { resets_at: 1793654921, used_percent: 0, window_duration_mins: 300 } },
 };
 const completed = {
   type: "response.completed",
@@ -74,19 +84,42 @@ test("catalog and OAuth are reused without changing the built-in Meta provider",
   assert.ok(originals.every((m) => m.provider === "meta"));
 });
 
-test("observed header names, contributor state, configured identity, valid independent traces", () => {
+test("empty-preset attribution matches the captured no-tools Muse profile", () => {
+  assert.equal(MUSE_EXEC_LINUX_X64_USER_AGENT, museExecProfile["user-agent"]);
+  assert.equal(museUserAgent({}, "linux", "x64"), museExecProfile["user-agent"]);
+  const { traceparent: _capturedTrace, ...captured } = museExecProfile;
+  const { traceparent, ...headers } = museHeaders("muse-spark-1.3-contributor", captured["x-tbh-session-id"], {
+    MUSE_USER_AGENT: museUserAgent({}, "linux", "x64"),
+  });
+  assert.deepEqual(headers, captured);
+  assert.match(traceparent!, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  assert.throws(() => museUserAgent({}, "darwin", "arm64"), /set MUSE_USER_AGENT/);
+  assert.throws(() => museUserAgent({}, "linux", "arm64"), /set MUSE_USER_AGENT/);
+  assert.equal(museUserAgent({ MUSE_USER_AGENT: "captured-other-build" }, "darwin", "arm64"), "captured-other-build");
+});
+
+test("tool-bearing profile includes the root header captured from native-basic", () => {
+  const { traceparent: _trace, ...captured } = museAgentProfile;
+  const { traceparent: _generatedTrace, ...headers } = museHeaders("muse-wonder-1.0", captured["x-tbh-session-id"], {
+    MUSE_USER_AGENT: captured["user-agent"],
+  }, true);
+  assert.deepEqual(headers, captured);
+});
+
+test("configured identity and independent traces do not invent model-dependent headers", () => {
   const env = { MUSE_USER_AGENT: "muse-build/test (linux; build fixture)", MUSE_CLIENT_ID: "tbh:tui", MUSE_AGENT_ROLE: "agent" };
   const first = museHeaders("muse-spark-1.3-contributor", "session", env);
   const second = museHeaders("muse-wonder-1.0", "session", env);
   assert.equal(first["x-client-id"], "tbh:tui");
   assert.equal(first["user-agent"], env.MUSE_USER_AGENT);
   assert.equal(first["x-tbh-agent-role"], "agent");
-  for (const key of ["x-tbh-session-id", "x-meta-ai-gateway-session-id", "x-tbh-thread-id", "x-tbh-root-session-id"]) {
+  for (const key of ["x-tbh-session-id", "x-meta-ai-gateway-session-id", "x-tbh-thread-id"]) {
     assert.equal(first[key], "session");
   }
-  assert.equal(first["x-tbh-contributor-mode"], "true");
-  assert.equal(second["x-tbh-contributor-mode"], "false");
-  assert.match(first.traceparent!, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  for (const headers of [first, second]) {
+    assert.ok(!("x-tbh-contributor-mode" in headers));
+    assert.ok(!("x-tbh-root-session-id" in headers));
+  }
   assert.notEqual(first.traceparent, second.traceparent);
   assert.throws(() => museHeaders("m", "s", { MUSE_USER_AGENT: "bad\r\ninjection" }), /printable ASCII/);
 });
@@ -115,7 +148,12 @@ for (const method of ["stream", "streamSimple"] as const) {
         assert.equal(headers.get("x-extra"), "keep");
         assert.equal(headers.get("user-agent"), "configured-agent");
         assert.equal(headers.get("x-tbh-session-id"), "stable-session");
-        assert.equal(headers.get("x-tbh-contributor-mode"), "true");
+        assert.equal(headers.has("x-tbh-contributor-mode"), false);
+        assert.equal(headers.has("x-tbh-root-session-id"), false);
+        assert.equal(headers.get("accept"), "text/event-stream");
+        assert.equal(headers.has("session_id"), false);
+        assert.equal(headers.has("x-client-request-id"), false);
+        assert.ok([...headers.keys()].every((name) => !name.startsWith("x-stainless-")));
         const body = JSON.parse(init.body as string);
         assert.equal(body.model, "muse-spark-1.3-contributor");
         assert.equal(body.stream, true);
@@ -135,10 +173,28 @@ for (const method of ["stream", "streamSimple"] as const) {
     assert.equal(requests, 1);
     assert.equal(responses, 1);
     assert.equal(payloads, 1);
-    assert.deepEqual(seenUsage, [{ u: { subscription_usage: usage.subscription_usage }, id: "stable-session" }]);
+    assert.deepEqual(seenUsage, [{ u: { subscription: usage.subscription }, id: "stable-session" }]);
     assert.ok(raw.some((e) => (e as { type: string }).type === usage.type));
   });
 }
+
+test("explicit model and request headers survive SDK-header cleanup", async () => {
+  const provider = createMuseProvider({ env: {} });
+  const selected = { ...model(provider), headers: { "X-Stainless-Runtime": "explicit-model", "User-Agent": "explicit-model-agent", "X-TBH-Agent-Role": "model-agent" } };
+  const { message } = await consume(provider.streamSimple(selected, context, {
+    apiKey: "test", headers: { "X-Client-Request-ID": "explicit-request", SESSION_ID: "explicit-session", "x-tbh-agent-role": "request-agent" },
+    fetch: fakeFetch(textEvents("OK"), (_url, init) => {
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get("x-stainless-runtime"), "explicit-model");
+      assert.equal(headers.get("user-agent"), "explicit-model-agent");
+      assert.equal(headers.get("x-tbh-agent-role"), "request-agent");
+      assert.equal(headers.get("x-client-request-id"), "explicit-request");
+      assert.equal(headers.get("session_id"), "explicit-session");
+      assert.equal(headers.has("x-stainless-package-version"), false);
+    }),
+  }));
+  assert.equal(message.stopReason, "stop");
+});
 
 test("empty response succeeds and caller can suppress default headers", async () => {
   const provider = createMuseProvider({ env: {} });
@@ -150,9 +206,154 @@ test("empty response succeeds and caller can suppress default headers", async ()
   assert.deepEqual(message.content, []);
 });
 
+for (const method of ["stream", "streamSimple"] as const) {
+  test(`${method}: bash wire alias restores streamed names, results and follow-up history`, async () => {
+    const provider = createMuseProvider({ env: {} });
+    const original = structuredClone(bashContext);
+    const item = { type: "function_call", id: "fc_bash", call_id: "call_bash", name: "muse_bash", arguments: "" };
+    const args = { command: "printf 'bash muse_bash héllo'" };
+    const rawNames: string[] = [];
+    const stream = provider[method](model(provider), bashContext, {
+      apiKey: "test", maxRetries: 0,
+      onProviderStreamEvent: (data) => {
+        const event = data as { item?: { name?: string } };
+        if (event.item?.name) rawNames.push(event.item.name);
+      },
+      fetch: fakeFetch([
+        { type: "response.output_item.added", output_index: 0, item },
+        { type: "response.function_call_arguments.delta", output_index: 0, delta: JSON.stringify(args) },
+        { type: "response.output_item.done", output_index: 0, item: { ...item, arguments: JSON.stringify(args) } }, completed,
+      ], (_url, init) => {
+        const body = JSON.parse(init.body as string);
+        assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["muse_bash"]);
+      }),
+    });
+    const resultPromise = stream.result();
+    const { events, message } = await consume(stream);
+    assert.equal(await resultPromise, message);
+    assert.equal(message.stopReason, "toolUse");
+    const partials = events.flatMap((event) => "partial" in event ? [event.partial] : []);
+    assert.equal(new Set(partials).size, 1, "preserve the shared live partial");
+    for (const partial of partials) for (const part of partial.content) {
+      if (part.type === "toolCall") assert.equal(part.name, "bash");
+    }
+    const end = events.find((event) => event.type === "toolcall_end")!;
+    assert.equal(end.type === "toolcall_end" && end.toolCall.name, "bash");
+    const call = message.content.find((part) => part.type === "toolCall")!;
+    assert.equal(call.name, "bash");
+    assert.deepEqual(call.arguments, args);
+    assert.ok(rawNames.length > 0 && rawNames.every((name) => name === "muse_bash"));
+    assert.deepEqual(bashContext, original);
+
+    const followup = normalizeContext({ tools: bashTools, messages: [...context.messages, message,
+      { role: "toolResult", toolCallId: call.id, toolName: "bash", isError: false, timestamp: 2,
+        content: [{ type: "text", text: "bash muse_bash héllo" }] },
+    ] });
+    const saved = structuredClone(followup);
+    await consume(provider[method](model(provider), followup, { apiKey: "test",
+      fetch: fakeFetch(textEvents("OK"), (_url, init) => {
+        const body = JSON.parse(init.body as string);
+        const wireCall = body.input.find((entry: { type: string }) => entry.type === "function_call");
+        assert.equal(wireCall.name, "muse_bash");
+        assert.deepEqual(JSON.parse(wireCall.arguments), args);
+        assert.ok(body.input.some((entry: { type: string; call_id?: string }) => entry.type === "function_call_output" && entry.call_id === wireCall.call_id));
+      }),
+    }));
+    assert.deepEqual(followup, saved);
+  });
+}
+
+test("bash alias avoids current/historical tool-name collisions and replays tool deltas", async () => {
+  const { aliasMuseTools } = await import("../src/tool-alias.ts");
+  const { getCurrentTools, getDeclaredTools } = await import("@earendil-works/pi-ai");
+  const tools = [...bashTools, { ...bashTools[0], name: "muse_bash" }, { ...bashTools[0], name: "muse_bash_2" }];
+  const transcript = normalizeContext({ tools, messages: [...context.messages,
+    { role: "system", content: "", toolsRemoved: [{ name: "muse_bash_2" }, { name: "bash" }], timestamp: 2 },
+    { role: "system", content: "", toolsAdded: bashTools, timestamp: 3 },
+  ] });
+  const saved = structuredClone(transcript);
+  const aliased = aliasMuseTools(transcript);
+  assert.deepEqual(getCurrentTools(aliased.context.messages).map((tool) => tool.name).sort(), ["muse_bash_3", "muse_muse_bash"]);
+  assert.ok(getDeclaredTools(aliased.context.messages).some((tool) => tool.name === "muse_muse_bash_2"));
+  assert.deepEqual(transcript, saved);
+  assert.equal(aliasMuseTools(context).context, context);
+});
+
+test("removal-only names cannot collide with the bash alias", async () => {
+  const { aliasMuseTools } = await import("../src/tool-alias.ts");
+  const { getCurrentTools } = await import("@earendil-works/pi-ai");
+  const transcript = normalizeContext({ tools: bashTools, messages: [...context.messages,
+    { role: "system", content: "", toolsRemoved: [{ name: "muse_bash" }], timestamp: 2 },
+  ] });
+  assert.deepEqual(getCurrentTools(transcript.messages).map((tool) => tool.name), ["bash"]);
+  assert.deepEqual(getCurrentTools(aliasMuseTools(transcript).context.messages).map((tool) => tool.name), ["muse_bash_2"]);
+});
+
+test("named and allowed tool choices follow the alias without touching MCP names", async () => {
+  const { aliasMuseTools } = await import("../src/tool-alias.ts");
+  const aliased = aliasMuseTools(bashContext);
+  for (const [choice, expected] of [
+    ["auto", "auto"],
+    [{ type: "function", name: "bash" }, { type: "function", name: "muse_bash" }],
+    [{ type: "custom", name: "bash" }, { type: "custom", name: "muse_bash" }],
+    [{ type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "bash" }, { type: "mcp", name: "bash" }] },
+      { type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "muse_bash" }, { type: "mcp", name: "bash" }] }],
+  ]) {
+    const saved = structuredClone(choice);
+    const options = { sessionId: "stable", toolChoice: choice };
+    assert.deepEqual(aliased.options(options)?.toolChoice, expected);
+    assert.deepEqual(choice, saved);
+    assert.equal(aliasMuseTools(context).options(options), options);
+  }
+  const provider = createMuseProvider({ env: {} });
+  const options: import("@earendil-works/pi-ai").OpenAIResponsesOptions = {
+    apiKey: "test", toolChoice: { type: "function", name: "bash" },
+    fetch: fakeFetch(textEvents("OK"), (_url, init) => {
+      const body = JSON.parse(init.body as string);
+      assert.equal(body.tool_choice.name, "muse_bash");
+      assert.equal(body.tools[0].name, "muse_bash");
+    }),
+  };
+  await consume(provider.stream(model(provider), bashContext, options));
+  assert.deepEqual(options.toolChoice, { type: "function", name: "bash" });
+});
+
+test("wire names are unique, bounded and disjoint from all original names", async () => {
+  const { museToolNames } = await import("../src/tool-alias.ts");
+  const long = "x".repeat(100);
+  const firstHash = museToolNames([long]).get(long)!;
+  const names = ["read", "muse_read", "muse_read_2", "odd.name/☃", long, firstHash.slice(5)];
+  const aliases = museToolNames(names);
+  assert.equal(new Set(aliases.values()).size, names.length);
+  for (const alias of aliases.values()) {
+    assert.match(alias, /^muse_[a-zA-Z0-9_-]{1,59}$/);
+    assert.ok(!names.includes(alias));
+  }
+});
+
+test("prefix-like user tool names survive repeated partial/end/result translation", async () => {
+  const { aliasMuseTools, museToolNames } = await import("../src/tool-alias.ts");
+  const tools = [bashTools[0], { ...bashTools[0], name: "muse_bash" }];
+  const transcript = normalizeContext({ tools, messages: context.messages });
+  const names = museToolNames(tools.map((tool) => tool.name));
+  const provider = createMuseProvider({ env: {} });
+  const item = { type: "function_call", id: "fc_custom", call_id: "call_custom", name: names.get("muse_bash"), arguments: "" };
+  const stream = provider.streamSimple(model(provider), transcript, { apiKey: "test", fetch: fakeFetch([
+    { type: "response.output_item.added", output_index: 0, item },
+    { type: "response.output_item.done", output_index: 0, item: { ...item, arguments: '{"command":"noop"}' } }, completed,
+  ]) });
+  const { events, message } = await consume(stream);
+  for (const event of events) if ("partial" in event) {
+    assert.ok(event.partial.content.every((part) => part.type !== "toolCall" || part.name === "muse_bash"));
+  }
+  assert.equal(message.content.find((part) => part.type === "toolCall")?.name, "muse_bash");
+  assert.equal((await stream.result()).content.find((part) => part.type === "toolCall")?.name, "muse_bash");
+  assert.notEqual(aliasMuseTools(transcript).context, transcript);
+});
+
 test("tool calls stay in Pi; tool results and images round-trip through the reused adapter", async () => {
   const provider = createMuseProvider({ env: {} });
-  const item = { type: "function_call", id: "fc_1", call_id: "call_1", name: "lookup", arguments: "" };
+  const item = { type: "function_call", id: "fc_1", call_id: "call_1", name: "muse_lookup", arguments: "" };
   const tools = [{ name: "lookup", description: "Look up a value", parameters: Type.Object({ name: Type.String() }) }];
   const transcript = normalizeContext({ tools, messages: context.messages });
   const { message } = await consume(provider.streamSimple(model(provider), transcript, {
@@ -218,7 +419,7 @@ test("reasoning and cross-provider handoff preserve Pi transcript semantics", as
 test("partial streams fail instead of reporting success", async () => {
   const provider = createMuseProvider({ env: {} });
   const partial = textEvents("partial").slice(0, -1);
-  const { message } = await consume(provider.streamSimple(model(provider), context, { apiKey: "test", fetch: fakeFetch(partial) }));
+  const { message } = await consume(provider.streamSimple(model(provider), bashContext, { apiKey: "test", fetch: fakeFetch(partial) }));
   assert.equal(message.stopReason, "error");
   assert.ok(message.errorMessage);
 });
@@ -226,7 +427,7 @@ test("partial streams fail instead of reporting success", async () => {
 test("attestation denial is surfaced without retry or billing fallback", async () => {
   const provider = createMuseProvider({ env: {} });
   let requests = 0;
-  const { message } = await consume(provider.streamSimple(model(provider), context, {
+  const { message } = await consume(provider.streamSimple(model(provider), bashContext, {
     apiKey: "test", maxRetries: 0,
     fetch: async () => {
       requests++;
@@ -251,7 +452,7 @@ test("context overflow is preserved as a provider error", async () => {
 test("abort reaches the transport and terminates as aborted", async () => {
   const provider = createMuseProvider({ env: {} });
   const controller = new AbortController();
-  const { message } = await consume(provider.streamSimple(model(provider), context, {
+  const { message } = await consume(provider.streamSimple(model(provider), bashContext, {
     apiKey: "test", signal: controller.signal,
     fetch: async (_url, init) => {
       assert.ok(init?.signal);

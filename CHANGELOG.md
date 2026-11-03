@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Fix subscription request rejections by namespacing tools on the wire while preserving Pi's tool names, arguments, IDs and transcript.
+- Match captured Muse 1.4.14 exec headers and default to its Linux x64 User-Agent.
+- Preserve explicit header overrides and streaming callbacks.
+- Add tool-mapping regression tests and bounded, opt-in CLI round-trip checks.
+
 ## 0.1.1
 
 - Read the current Muse credential format (`providers.meta.api_key`) as well as the legacy top-level `api_key`; never use `access_token` for inference.

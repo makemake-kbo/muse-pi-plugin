@@ -1,6 +1,6 @@
 {
   "name": "pi-muse-provider",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publishConfig": { "access": "public" },
   "files": ["src/", "CHANGELOG.md"],
   "type": "module",
@@ -10,6 +10,8 @@
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "capture:muse": "tsx scripts/capture-muse.ts",
+    "check:live": "tsx scripts/live-check.ts",
     "prepublishOnly": "npm run typecheck && npm test"
   },
   "peerDependencies": {
