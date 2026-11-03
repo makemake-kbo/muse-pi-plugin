@@ -26,8 +26,8 @@ No separate Pi login is needed. Stored `/login muse` credentials take precedence
 
 - `MUSE_AUTH_FILE`: override the credential path.
 - `MUSE_API_KEY`: use an inference key directly.
-- `MUSE_USER_AGENT`: override the captured Muse 1.4.14 Linux x64 identity;
-  required on other platforms.
+- `MUSE_USER_AGENT`: override the captured Muse 1.4.14 identity. Captured
+  defaults exist for Linux x64 and macOS arm64; other platforms must set it.
 - `/muse-usage`: show the latest server-reported subscription usage.
 
 Tools are namespaced on the wire. No automatic billing fallback (but you may still be charged. I am a random on the internet. scope your tokens well). In a sandbox, expose the auth file

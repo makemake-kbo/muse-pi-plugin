@@ -13,7 +13,9 @@ import { aliasMuseTools } from "./tool-alias.ts";
 
 export const PROVIDER_ID = "muse";
 // Captured from Muse Code 1.4.14 exec, not derived from this package's version.
+// `MUSE_BINARY=... npm run capture:muse` against the installed binary reproduces them.
 export const MUSE_EXEC_LINUX_X64_USER_AGENT = "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)";
+export const MUSE_EXEC_DARWIN_ARM64_USER_AGENT = "muse-build/1.4.14 (non-interactive; macos-aarch64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)";
 type Env = Record<string, string | undefined>;
 export type SubscriptionUsage = Record<string, unknown>;
 
@@ -54,13 +56,20 @@ export async function readMuseKey(path: string, signal?: AbortSignal): Promise<s
   return key.trim();
 }
 
+// Keyed by the Node platform and arch this process runs on.
+const CAPTURED_USER_AGENTS: Record<string, string> = {
+  "linux-x64": MUSE_EXEC_LINUX_X64_USER_AGENT,
+  "darwin-arm64": MUSE_EXEC_DARWIN_ARM64_USER_AGENT,
+};
+
 /** Use the captured exec identity; never silently fall back to a Pi User-Agent. */
 export function museUserAgent(env: Env, platform: string = process.platform, arch: string = process.arch): string {
   if (env.MUSE_USER_AGENT) return headerValue("MUSE_USER_AGENT", env.MUSE_USER_AGENT);
-  if (platform !== "linux" || arch !== "x64") {
+  const captured = CAPTURED_USER_AGENTS[`${platform}-${arch}`];
+  if (!captured) {
     throw new Error("No captured Muse exec identity for this platform; set MUSE_USER_AGENT from your Muse CLI");
   }
-  return MUSE_EXEC_LINUX_X64_USER_AGENT;
+  return captured;
 }
 
 /** Main-agent attribution captured from Muse exec; model selection stays in the payload. */

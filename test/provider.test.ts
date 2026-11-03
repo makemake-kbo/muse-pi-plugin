@@ -10,9 +10,9 @@ import {
 import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
 import {
   createMuseProvider as createRawMuseProvider, museAuthPath, museHeaders, museUserAgent,
-  MUSE_EXEC_LINUX_X64_USER_AGENT, readMuseKey, subscriptionUsage,
+  MUSE_EXEC_DARWIN_ARM64_USER_AGENT, MUSE_EXEC_LINUX_X64_USER_AGENT, readMuseKey, subscriptionUsage,
 } from "../src/provider.ts";
-import { museExecProfile, museAgentProfile } from "./fixtures/muse-exec-profile.ts";
+import { museExecProfile, museAgentProfile, museDarwinProfile } from "./fixtures/muse-exec-profile.ts";
 
 // Keep intercepted-transport tests deterministic on hosts without a captured profile.
 function createMuseProvider(options: Parameters<typeof createRawMuseProvider>[0] = {}) {
@@ -93,9 +93,21 @@ test("empty-preset attribution matches the captured no-tools Muse profile", () =
   });
   assert.deepEqual(headers, captured);
   assert.match(traceparent!, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
-  assert.throws(() => museUserAgent({}, "darwin", "arm64"), /set MUSE_USER_AGENT/);
+  assert.equal(MUSE_EXEC_DARWIN_ARM64_USER_AGENT, museDarwinProfile["user-agent"]);
+  assert.equal(museUserAgent({}, "darwin", "arm64"), museDarwinProfile["user-agent"]);
   assert.throws(() => museUserAgent({}, "linux", "arm64"), /set MUSE_USER_AGENT/);
-  assert.equal(museUserAgent({ MUSE_USER_AGENT: "captured-other-build" }, "darwin", "arm64"), "captured-other-build");
+  assert.throws(() => museUserAgent({}, "darwin", "x64"), /set MUSE_USER_AGENT/);
+  assert.throws(() => museUserAgent({}, "win32", "x64"), /set MUSE_USER_AGENT/);
+  assert.equal(museUserAgent({ MUSE_USER_AGENT: "captured-other-build" }, "win32", "x64"), "captured-other-build");
+});
+
+test("macOS attribution matches the captured arm64 Muse profile", () => {
+  const { traceparent: _capturedTrace, ...captured } = museDarwinProfile;
+  const { traceparent, ...headers } = museHeaders("muse-spark-1.3-contributor", captured["x-tbh-session-id"], {
+    MUSE_USER_AGENT: museUserAgent({}, "darwin", "arm64"),
+  });
+  assert.deepEqual(headers, captured);
+  assert.match(traceparent!, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
 });
 
 test("tool-bearing profile includes the root header captured from native-basic", () => {
